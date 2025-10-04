@@ -1,16 +1,23 @@
 # --- Makefile ---
-PY=python3
+PY=python
 
-.PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset
+.PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset api-build api-up api-down setup clean up down
 
+SLEEP2 = powershell -Command "Start-Sleep -Seconds 2"
+CURL_RDY = powershell -Command "try { iwr -UseBasicParsing http://localhost:6333/ready -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }"
 
 # -------- Environment ----------
 
 setup:
 	@echo ">> Creating venv and installing API requirements..."
-	$(PY) -m venv .venv
+	# ---- Windows
+	- .venv/Scripts/python.exe -m pip --version >NUL 2>&1 || true
+	- PY -3 -m venv .venv || python -m venv .venv
+	- .venv/Scripts/python.exe -m pip install -U pip || true
+	- .venv/Scripts/python.exe -m pip install -r api/requirements.txt || true
+	# ---- macOS/Linux:
+	- python3 -m venv .venv || true
 	- . .venv/bin/activate && pip install -U pip && pip install -r api/requirements.txt || true
-	- . .venv/Scripts/activate && pip install -U pip && pip install -r api/requirements.txt || true
 	@echo ">> venv ready."
 
 clean: down
@@ -39,8 +46,12 @@ nifi-logs:
 qdrant-up:
 	@echo ">> Starting Qdrant..."
 	docker compose up -d qdrant
-	@$(SLEEP_2)
-	@$(MAKE) qdrant-wait
+	@echo ">> Checking Qdrant health..."
+	# Windows:
+	- powershell -Command "$$i=0; while($$i -lt 15){ try{ iwr -UseBasicParsing http://localhost:6333/ready -TimeoutSec 2 | Out-Null; Write-Host 'Qdrant is ready.'; exit 0 } catch { Start-Sleep -Seconds 2; $$i++ } }; exit 1"
+	# macOS/Linux:
+	- sh -c 'for i in $$(seq 1 15); do curl -fsS http://localhost:6333/ready >/dev/null 2>&1 && { echo Qdrant is ready.; exit 0; }; echo waiting... $$i; sleep 2; done; exit 1' || true
+
 
 qdrant-down:
 	@echo ">> Stopping Qdrant..."
@@ -56,7 +67,6 @@ qdrant-reset:
 	@echo ">> WARNING: This will remove Qdrant data volume."
 	docker compose down -v qdrant || true
 	docker compose up -d qdrant
-	@$(MAKE) qdrant-wait
 
 
 # -------- API ----------
@@ -67,11 +77,11 @@ api-build:
 api-up:
 	@echo ">> Starting API..."
 	docker compose up -d api
-	@echo "API Docs: http://localhost:$(API_PORT)/docs"
+	@echo "API Docs: http://localhost:8000/docs"
 
 api-down:
 	@echo ">> Stopping API..."
 	docker compose stop api
 
-up: setup nifi-up qdrant-up api-up
+up: setup nifi-up qdrant-up api-build api-up
 down: clean nifi-down qdrant-down api-down
