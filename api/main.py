@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from rag.embedder import get_embedder
-from rag.retriever_qdrant import QdrantRetriever
+from rag.retriever import QdrantRetriever
 
 app = FastAPI(title="RAG API (basic)")
 
@@ -18,7 +18,7 @@ retriever = QdrantRetriever(QDRANT_URL, COLLECTION, encode)
 class QueryIn(BaseModel):
     query: str
     top_k: int = 5
-    lang: Optional[str] = None   # "en" gibi
+    lang: Optional[str] = None
 
 class ContextOut(BaseModel):
     text: str
@@ -28,10 +28,10 @@ class ContextOut(BaseModel):
     section: Optional[str] = None
 
 class QueryOut(BaseModel):
-    variant: str          # A veya B
+    variant: str
     contexts: List[ContextOut]
 
-# ---- ENDPOINT'LER ----
+# ---- ENDPOINTS ----
 @app.get("/test")
 def test():
     return {"ok": True}

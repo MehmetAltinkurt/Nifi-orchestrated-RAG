@@ -3,6 +3,21 @@ PY=python3
 
 .PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset
 
+
+# -------- Environment ----------
+
+setup:
+	@echo ">> Creating venv and installing API requirements..."
+	$(PY) -m venv .venv
+	- . .venv/bin/activate && pip install -U pip && pip install -r api/requirements.txt || true
+	- . .venv/Scripts/activate && pip install -U pip && pip install -r api/requirements.txt || true
+	@echo ">> venv ready."
+
+clean: down
+	@echo ">> Cleaning venv and reports..."
+	-rm -rf .venv reports/*.json reports/*.md
+
+
 # -------- NiFi ----------
 nifi-up:
 	@echo ">> Starting NiFi..."
@@ -37,16 +52,6 @@ qdrant-logs:
 	docker compose logs -f qdrant
 
 
-qdrant-wait:
-	@echo ">> Checking Qdrant health on :$(QDRANT_PORT)..."
-	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		curl -fsS http://localhost:$(QDRANT_PORT)/ready >/dev/null 2>&1 && { echo "Qdrant is ready."; exit 0; }; \
-		echo "waiting... ($$i)"; \
-		$(SLEEP_2); \
-	done; \
-	echo "Qdrant did not become ready in time." && exit 1
-
-
 qdrant-reset:
 	@echo ">> WARNING: This will remove Qdrant data volume."
 	docker compose down -v qdrant || true
@@ -54,5 +59,19 @@ qdrant-reset:
 	@$(MAKE) qdrant-wait
 
 
+# -------- API ----------
+api-build:
+	@echo ">> Building API image..."
+	docker compose build api
 
-down: nifi-down qdrant-down
+api-up:
+	@echo ">> Starting API..."
+	docker compose up -d api
+	@echo "API Docs: http://localhost:$(API_PORT)/docs"
+
+api-down:
+	@echo ">> Stopping API..."
+	docker compose stop api
+
+up: setup nifi-up qdrant-up api-up
+down: clean nifi-down qdrant-down api-down

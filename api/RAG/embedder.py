@@ -19,7 +19,7 @@ def get_embedder(model_name: Optional[str] = None):
             return []
         embs = model.encode(
             arr,
-            normalize_embeddings=True,  # cosine için
+            normalize_embeddings=True,
             convert_to_numpy=True,
             show_progress_bar=False,
         )
@@ -27,7 +27,6 @@ def get_embedder(model_name: Optional[str] = None):
     return encode
 
 def get_dimension(model_name: Optional[str] = None):
-    """Probe ile embedding boyutunu döndür (koleksiyon kurarken işine yarar)."""
     enc = get_embedder(model_name)
     vecs = enc(["test"])
     return len(vecs[0]) if vecs and vecs[0] is not None else 0
