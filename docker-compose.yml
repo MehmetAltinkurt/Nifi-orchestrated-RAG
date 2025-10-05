@@ -1,12 +1,14 @@
 # docker-compose.yml
 services:
   nifi:
-    image: apache/nifi:latest
-    ports:
-      - "8080:8080"
+    image: apache/nifi:2.6.0
+    ports: ["8443:8443"]
     environment:
-      - NIFI_WEB_HTTP_PORT=8080
+      - NIFI_WEB_HTTPS_PORT=8443
+      - SINGLE_USER_CREDENTIALS_USERNAME=admin
+      - SINGLE_USER_CREDENTIALS_PASSWORD=adminadminadmin
     volumes:
+      - nifi_state:/opt/nifi/nifi-current
       - ./nifi/templates:/opt/nifi/nifi-current/templates
 
   qdrant:
@@ -27,4 +29,5 @@ services:
       - EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 
 volumes:
+  nifi_state:
   qdrant_data:

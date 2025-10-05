@@ -48,7 +48,7 @@ qdrant-up:
 	docker compose up -d qdrant
 	@echo ">> Checking Qdrant health..."
 	# Windows:
-	- powershell -Command "$$i=0; while($$i -lt 15){ try{ iwr -UseBasicParsing http://localhost:6333/ready -TimeoutSec 2 | Out-Null; Write-Host 'Qdrant is ready.'; exit 0 } catch { Start-Sleep -Seconds 2; $$i++ } }; exit 1"
+	- - powershell -Command "$$ErrorActionPreference='SilentlyContinue'; for($$i=0; $$i -lt 30; $$i++){ try { $$r = Invoke-WebRequest -UseBasicParsing http://localhost:$(QDRANT_PORT)/ready -TimeoutSec 2; if ($$r.StatusCode -eq 200) { Write-Host 'Qdrant is ready.'; exit 0 } } catch { } Start-Sleep -Seconds 2 } exit 1" || true
 	# macOS/Linux:
 	- sh -c 'for i in $$(seq 1 15); do curl -fsS http://localhost:6333/ready >/dev/null 2>&1 && { echo Qdrant is ready.; exit 0; }; echo waiting... $$i; sleep 2; done; exit 1' || true
 

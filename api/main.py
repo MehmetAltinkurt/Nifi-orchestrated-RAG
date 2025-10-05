@@ -2,17 +2,25 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 
-from rag.embedder import get_embedder
-from rag.retriever import QdrantRetriever
-
-app = FastAPI(title="RAG API (basic)")
+app = FastAPI(title="RAG API")
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 QDRANT_URL = "http://qdrant:6333" 
 COLLECTION = "docs"
 
-encode = get_embedder(EMBED_MODEL)
-retriever = QdrantRetriever(QDRANT_URL, COLLECTION, encode)
+#since it takes long time to start I will try lazy-load
+_embed = None
+_retriever = None
+
+def _ensure_services():
+    """İlk çağrıda embedder ve retriever'ı hazırlar."""
+    global _embed, _retriever
+    if _embed is None:
+        from rag.embedder import get_embedder
+        _embed = get_embedder(EMBED_MODEL)
+    if _retriever is None:
+        from rag.retriever import QdrantRetriever
+        _retriever = QdrantRetriever(QDRANT_URL, COLLECTION, _embed)
 
 # ---- PYDANTIC MODELS ----
 class QueryIn(BaseModel):
@@ -40,8 +48,8 @@ def test():
 def query(body: QueryIn, x_variant: str = Header(default="A")):
     if x_variant not in ("A", "B"):
         raise HTTPException(status_code=400, detail="X-Variant must be 'A' or 'B'")
-
-    results = retriever.search(
+    _ensure_services()
+    results = _retriever.search(
         query=body.query,
         top_k=body.top_k,
         variant=x_variant,
