@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
 from rag.generator import generate_answer
-import time
+import time, io, re
 
 app = FastAPI(title="RAG API")
 
@@ -41,6 +41,8 @@ class ContextOut(BaseModel):
 class QueryOut(BaseModel):
     variant: str
     contexts: List[ContextOut]
+    latency_ms: int
+    answer: str
 
 class UpsertIn(BaseModel):
     text: str
@@ -74,8 +76,8 @@ def query(body: QueryIn, x_variant: str = Header(default="A")):
         try:
             answer = generate_answer(body.query, ctx_texts)
         except Exception as e:
-            # graceful degrade to no llm
-            answer = f"(llm error, fallback) {' '.join(ctx_texts[:2]) if ctx_texts else '(no hits)'}"
+            # graceful degrade if llm fails
+            answer = f"{' '.join(ctx_texts[:2]) if ctx_texts else '(no hits)'}"
 
     latency = int((time.time() - t0) * 1000)
     return {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "answer": answer}
@@ -95,3 +97,95 @@ def upsert(body: UpsertIn):
     retr = _retriever
     retr.upsert_doc(body.text, payload)
     return {"ok": True}
+
+@app.post("/ingest-file")
+async def ingest_file(
+    request: Request,
+    lang: Optional[str] = None,
+    url: Optional[str] = None,
+    section: Optional[str] = None,
+    content_type: Optional[str] = Header(None),
+    x_filename: Optional[str] = Header(None),
+):
+    _ensure_services()
+
+    content: bytes = await request.body()
+    if not content:
+        return {"ok": False, "error": "empty-body"}
+
+    def printable_ratio(s: str) -> float:
+        if not s:
+            return 0.0
+        printable = sum(ch.isprintable() and ch not in "\x0b\x0c" for ch in s)
+        return printable / max(1, len(s))
+
+    text = ""
+    filename = x_filename.lower()
+    ctype = content_type.lower()
+    is_pdf = "pdf" in ctype or filename.endswith(".pdf")
+
+    try:
+        if is_pdf:
+            try:
+                from pypdf import PdfReader
+                import io, os
+                max_pages = int(os.getenv("INGEST_MAX_PAGES", "50"))
+                reader = PdfReader(io.BytesIO(content))
+                pages = reader.pages[:max_pages]
+                text = "\n".join((p.extract_text() or "") for p in pages)
+            except Exception:
+                text = ""
+
+            if printable_ratio(text) < 0.6:
+                try:
+                    import fitz
+                    import io, os
+                    max_pages = int(os.getenv("INGEST_MAX_PAGES", "50"))
+                    doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
+                    parts = []
+                    for i, page in enumerate(doc):
+                        if i >= max_pages:
+                            break
+                        parts.append(page.get_text("text"))
+                    doc.close()
+                    alt = "\n".join(parts)
+                    if printable_ratio(alt) >= printable_ratio(text):
+                        text = alt
+                except Exception:
+                    pass
+        else:
+            text = content.decode("utf-8", errors="ignore")
+    except Exception as e:
+        return {"ok": False, "error": f"parse-failed: {e}"}
+
+    text = text.strip()
+    if printable_ratio(text) < 0.3:
+        return {"ok": False, "error": "parsed-text-unreadable"}
+
+    if not text:
+        return {"ok": False, "error": "parsed-text-empty"}
+
+    import re
+    sentences = re.split(r'(?<=[\.\!\?])\s+', text)
+    MAX = 480
+    chunks, buf, L = [], [], 0
+    for s in sentences:
+        s = (s or "").strip()
+        if not s:
+            continue
+        if L + len(s) + 1 <= MAX:
+            buf.append(s); L += len(s) + 1
+        else:
+            if buf: chunks.append(" ".join(buf))
+            buf = [s]; L = len(s)
+    if buf: chunks.append(" ".join(buf))
+
+    meta = {"lang": lang, "url": url or (f"upload:{x_filename}" if x_filename else None), "section": section}
+    meta = {k: v for k, v in meta.items() if v is not None}
+
+    n_upsert = 0
+    for c in chunks:
+        _retriever.upsert_doc(c, {**meta, "text": c})
+        n_upsert += 1
+
+    return {"ok": True, "chunks": n_upsert, "content_type": content_type, "filename": x_filename}
