@@ -10,6 +10,8 @@ services:
     volumes:
       - nifi_state:/opt/nifi/nifi-current
       - ./nifi/templates:/opt/nifi/nifi-current/templates
+      - ./nifi/scripts:/opt/nifi/nifi-current/scripts
+      - ./data/inbox:/data/inbox
 
   qdrant:
     image: qdrant/qdrant:latest
