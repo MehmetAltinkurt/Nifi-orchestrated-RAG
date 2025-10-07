@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from rag.generator import generate_answer
-import time, io, re
+import time, uuid
 
 app = FastAPI(title="RAG API")
 
@@ -11,12 +11,14 @@ EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 QDRANT_URL = "http://qdrant:6333" 
 COLLECTION = "docs"
 
+STATS = {"A": 0, "B": 0, "tie": 0, "total": 0}
+QUERIES = {}
+
 #since it takes long time to start I will try lazy-load
 _embed = None
 _retriever = None
 
 def _ensure_services():
-    """İlk çağrıda embedder ve retriever'ı hazırlar."""
     global _embed, _retriever
     if _embed is None:
         from rag.embedder import get_embedder
@@ -43,12 +45,17 @@ class QueryOut(BaseModel):
     contexts: List[ContextOut]
     latency_ms: int
     answer: str
+    query_id: Optional[str] = None
 
 class UpsertIn(BaseModel):
     text: str
     lang: Optional[str] = None
     url: Optional[str] = None
     section: Optional[str] = None
+
+class FeedbackIn(BaseModel):
+    query_id: str
+    winner: str  
 
 # ---- ENDPOINTS ----
 @app.get("/test")
@@ -80,8 +87,10 @@ def query(body: QueryIn, x_variant: str = Header(default="A")):
             answer = f"{' '.join(ctx_texts[:2]) if ctx_texts else '(no hits)'}"
 
     latency = int((time.time() - t0) * 1000)
-    return {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "answer": answer}
-
+    qid = str(uuid.uuid4())
+    query_output = {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "answer": answer, "query_id": qid}
+    QUERIES[qid] = query_output
+    return query_output
 
 @app.post("/upsert")
 def upsert(body: UpsertIn):
@@ -189,3 +198,24 @@ async def ingest_file(
         n_upsert += 1
 
     return {"ok": True, "chunks": n_upsert, "content_type": content_type, "filename": x_filename}
+
+@app.post("/feedback")
+def feedback(body: FeedbackIn):
+    qid = body.query_id
+    winner = body.winner
+    if winner not in ("A","B","tie"):
+        raise HTTPException(400, "winner must be 'A', 'B' or 'tie'")
+    if qid not in QUERIES:
+        raise HTTPException(400, "unknown query_id")
+    global STATS
+    STATS[winner] += 1
+    STATS["total"] += 1
+    return {"ok": True}
+
+@app.get("/stats")
+def stats():
+    a, b, t, tot = STATS["A"], STATS["B"], STATS["tie"], STATS["total"]
+    return {
+        "counts": {"A": a, "B": b, "tie": t, "total": tot},
+        "win_rate": {"A": a/tot, "B": b/tot, "tie": t/tot}
+    }
