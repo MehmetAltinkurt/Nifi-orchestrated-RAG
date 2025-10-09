@@ -66,35 +66,30 @@ class FeedbackIn(BaseModel):
 def test():
     return {"ok": True}
 
+def run_query_core(q: str, top_k: int, variant: str, lang: Optional[str]):
+    _ensure_services()
+    t0 = time.time()
+    ctx = _retriever.search(query=q, top_k=top_k, variant=variant, lang=lang)
+    ctx_texts = [c["text"] for c in ctx if c.get("text")]
+    if variant == "A":
+        answer = " ".join(ctx_texts[:2]) if ctx_texts else "(no hits)"
+    else:
+        try:
+            answer = generate_answer(q, ctx_texts)
+        except Exception:
+            answer = " ".join(ctx_texts[:2]) if ctx_texts else "(no hits)"
+    latency = int((time.time() - t0) * 1000)
+    return {"contexts": ctx, "answer": answer, "latency_ms": latency}
+
 @app.post("/query", response_model=QueryOut)
 def query(body: QueryIn, x_variant: str = Header(default="A")):
     if x_variant not in ("A","B"):
         raise HTTPException(400, "X-Variant must be 'A' or 'B'")
-    _ensure_services()
-
-    t0 = time.time()
-    ctx = _retriever.search(
-        query=body.query, top_k=body.top_k, variant=x_variant, lang=body.lang
-    )
-
-    ctx_texts = [c["text"] for c in ctx if c.get("text")]
-
-    if x_variant == "A":
-        # variant A: just the context without LLM
-        answer = " ".join(ctx_texts[:2]) if ctx_texts else "(no hits)"
-    else:
-        # variant B: with LLM answer generation
-        try:
-            answer = generate_answer(body.query, ctx_texts)
-        except Exception as e:
-            # graceful degrade if llm fails
-            answer = f"{' '.join(ctx_texts[:2]) if ctx_texts else '(no hits)'}"
-
-    latency = int((time.time() - t0) * 1000)
+    out = run_query_core(body.query, body.top_k, x_variant, body.lang)
     qid = str(uuid.uuid4())
-    query_output = {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "question" :body.query, "answer": answer, "query_id": qid}
-    QUERIES[qid] = query_output
-    return query_output
+    QUERIES[qid] = {"variant": x_variant, "question": body.query, **out}
+    return {"variant": x_variant, "query_id": qid, **out}
+
 
 @app.post("/upsert")
 def upsert(body: UpsertIn):
@@ -133,8 +128,8 @@ async def ingest_file(
         return printable / max(1, len(s))
 
     text = ""
-    filename = x_filename.lower()
-    ctype = content_type.lower()
+    filename = (x_filename or "").lower()
+    ctype    = (content_type or "").lower()
     is_pdf = "pdf" in ctype or filename.endswith(".pdf")
 
     try:
@@ -216,8 +211,8 @@ def feedback(body: FeedbackIn):
     STATS["total"] += 1
     return {"ok": True}
 
-@app.get("/stats")
-def stats():
+@app.get("/online-stats")
+def online_stats():
     a, b, t, tot = STATS["A"], STATS["B"], STATS["tie"], STATS["total"]
     if tot == 0:
         return {
@@ -233,6 +228,12 @@ def stats():
 def get_queries():
     return QUERIES
 
+def cos(a, b):
+    na, nb = float(norm(a)), float(norm(b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return float(dot(a, b) / (na * nb))
+
 @app.get("/offline_eval")
 def offline_eval():
     file_path = "data/qd_test.json"
@@ -241,25 +242,18 @@ def offline_eval():
     
     out_list = list()
     for qa in data:
+        outA = run_query_core(qa["q"], 5, "A", None)
+        outB = run_query_core(qa["q"], 5, "B", None)
         vec_g = _embed.encode(qa["a"])
-        var = "A"
-        result = query({"query": qa["q"], "top_k": 5}, var)
-        answer_A = result["answer"]
-        vec_A = _embed.encode(answer_A)
-        score_A = dot(vec_g, vec_A)/(norm(vec_g)*norm(vec_A))
-
-        var = "B"
-        result = query({"query": qa["q"], "top_k": 5}, var)
-        answer_B = result["answer"]
-        vec_B = _embed.encode(answer_B)
-        score_B = dot(vec_g, vec_B)/(norm(vec_g)*norm(vec_B))
+        score_A = cos(vec_g, _embed.encode(outA["answer"]))
+        score_B = cos(vec_g, _embed.encode(outB["answer"]))
         if score_A > score_B:
             winner = "A"
         elif score_A < score_B:
             winner = "B"
         else:
             winner = "tie"
-        out_list.append({"question":qa["q"], "answer_A":answer_A, "answer_B":answer_B, "winner":winner})
+        out_list.append({"question":qa["q"], "answer_A":outA["answer"], "answer_B":outB["answer"], "winner":winner})
     
     with open('output.json', 'w', encoding='utf-8') as f:
         json.dump(out_list, f, ensure_ascii=False, indent=4)

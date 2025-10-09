@@ -1,5 +1,5 @@
 # --- Makefile ---
-.PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset api-build api-up api-down setup clean up down
+.PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset api-build api-up api-down setup clean up down offline-eval daily-report report
 
 SLEEP2 = powershell -Command "Start-Sleep -Seconds 2"
 CURL_RDY = powershell -Command "try { iwr -UseBasicParsing http://localhost:6333/ready -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }"
@@ -79,3 +79,15 @@ api-down:
 
 up: setup nifi-up qdrant-up api-build api-up
 down: clean nifi-down qdrant-down api-down
+
+# -------- Reports ----------
+offline-eval:
+	@echo ">> Offline eval (cosine) running..."
+	@python scripts/offline_eval.py
+
+daily-report:
+	@echo ">> Generating daily report..."
+	@python scripts/daily_report.py
+
+report: offline-eval daily-report
+	@echo ">> Report ready. See 'output_offline.json' and 'reports/' folder."
