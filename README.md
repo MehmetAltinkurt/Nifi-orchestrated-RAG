@@ -43,5 +43,25 @@ Password → adminadmin
 URL → http://localhost:6333/dashboard
 
 4. **API**
-URL → http://localhost:8000/docs
+Swager → http://localhost:8000/docs
 
+5. **ingest file**
+put a pdf file into data/inbox folder
+
+6. **Create report**
+    put qa json file into data folder
+
+   ```bash
+   make offline-eval
+
+7. **stop everything**
+    ```bash
+    make down
+
+8. **remove environment**
+    ```bash
+   make clean
+
+9. **clear vector database**
+    ```bash
+   make qdrant-reset
