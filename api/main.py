@@ -2,8 +2,12 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
+from numpy import dot
+from numpy.linalg import norm
+
 from rag.generator import generate_answer
 import time, uuid
+import json
 
 app = FastAPI(title="RAG API")
 
@@ -88,7 +92,7 @@ def query(body: QueryIn, x_variant: str = Header(default="A")):
 
     latency = int((time.time() - t0) * 1000)
     qid = str(uuid.uuid4())
-    query_output = {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "answer": answer, "query_id": qid}
+    query_output = {"variant": x_variant, "contexts": ctx, "latency_ms": latency, "question" :body.query, "answer": answer, "query_id": qid}
     QUERIES[qid] = query_output
     return query_output
 
@@ -137,8 +141,8 @@ async def ingest_file(
         if is_pdf:
             try:
                 from pypdf import PdfReader
-                import io, os
-                max_pages = int(os.getenv("INGEST_MAX_PAGES", "50"))
+                import io
+                max_pages = 50
                 reader = PdfReader(io.BytesIO(content))
                 pages = reader.pages[:max_pages]
                 text = "\n".join((p.extract_text() or "") for p in pages)
@@ -148,8 +152,8 @@ async def ingest_file(
             if printable_ratio(text) < 0.6:
                 try:
                     import fitz
-                    import io, os
-                    max_pages = int(os.getenv("INGEST_MAX_PAGES", "50"))
+                    import io
+                    max_pages = 50
                     doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
                     parts = []
                     for i, page in enumerate(doc):
@@ -215,7 +219,50 @@ def feedback(body: FeedbackIn):
 @app.get("/stats")
 def stats():
     a, b, t, tot = STATS["A"], STATS["B"], STATS["tie"], STATS["total"]
+    if tot == 0:
+        return {
+            "counts": {"A": 0, "B": 0, "tie": 0, "total": 0},
+            "win_rate": {"A": 0, "B": 0, "tie": 0}
+            }
     return {
         "counts": {"A": a, "B": b, "tie": t, "total": tot},
         "win_rate": {"A": a/tot, "B": b/tot, "tie": t/tot}
     }
+
+@app.get("/get_queries")
+def get_queries():
+    return QUERIES
+
+@app.get("/offline_eval")
+def offline_eval():
+    file_path = "data/qd_test.json"
+    with open(file_path, "r") as f:
+        data =json.loads(f.read())
+    
+    out_list = list()
+    for qa in data:
+        vec_g = _embed.encode(qa["a"])
+        var = "A"
+        result = query({"query": qa["q"], "top_k": 5}, var)
+        answer_A = result["answer"]
+        vec_A = _embed.encode(answer_A)
+        score_A = dot(vec_g, vec_A)/(norm(vec_g)*norm(vec_A))
+
+        var = "B"
+        result = query({"query": qa["q"], "top_k": 5}, var)
+        answer_B = result["answer"]
+        vec_B = _embed.encode(answer_B)
+        score_B = dot(vec_g, vec_B)/(norm(vec_g)*norm(vec_B))
+        if score_A > score_B:
+            winner = "A"
+        elif score_A < score_B:
+            winner = "B"
+        else:
+            winner = "tie"
+        out_list.append({"question":qa["q"], "answer_A":answer_A, "answer_B":answer_B, "winner":winner})
+    
+    with open('output.json', 'w', encoding='utf-8') as f:
+        json.dump(out_list, f, ensure_ascii=False, indent=4)
+
+
+

@@ -1,6 +1,4 @@
 # --- Makefile ---
-PY=python
-
 .PHONY: nifi-up nifi-down nifi-restart nifi-logs qdrant-up qdrant-down qdrant-restart qdrant-logs qdrant-wait qdrant-reset api-build api-up api-down setup clean up down
 
 SLEEP2 = powershell -Command "Start-Sleep -Seconds 2"
@@ -10,15 +8,17 @@ CURL_RDY = powershell -Command "try { iwr -UseBasicParsing http://localhost:6333
 
 setup:
 	@echo ">> Creating venv and installing API requirements..."
-	# ---- Windows
-	- .venv/Scripts/python.exe -m pip --version >NUL 2>&1 || true
-	- PY -3 -m venv .venv || python -m venv .venv
-	- .venv/Scripts/python.exe -m pip install -U pip || true
-	- .venv/Scripts/python.exe -m pip install -r api/requirements.txt || true
-	# ---- macOS/Linux:
-	- python3 -m venv .venv || true
-	- . .venv/bin/activate && pip install -U pip && pip install -r api/requirements.txt || true
-	@echo ">> venv ready."
+	@if [ ! -x ".venv/Scripts/python.exe" ] && [ ! -x ".venv/bin/python" ]; then \
+		echo ">> Creating venv..."; \
+		python3 -m venv .venv || python -m venv .venv; \
+	fi; \
+	if [ -x ".venv/Scripts/python.exe" ]; then VENV_PY=".venv/Scripts/python.exe"; \
+	elif [ -x ".venv/bin/python" ]; then VENV_PY=".venv/bin/python"; \
+	else echo "!! venv python not found"; exit 1; fi; \
+	echo ">> Using venv python: $$VENV_PY"; \
+	"$$VENV_PY" -m pip install -U pip; \
+	if [ -f "api/requirements.txt" ]; then "$$VENV_PY" -m pip install -r api/requirements.txt; fi; \
+	echo ">> venv ready."
 
 clean: down
 	@echo ">> Cleaning venv and reports..."
@@ -29,8 +29,8 @@ clean: down
 nifi-up:
 	@echo ">> Starting NiFi..."
 	docker compose up -d nifi
-	@$(SLEEP_2)
-	@echo "NiFi UI: http://localhost:8080"
+	@$(SLEEP2)
+	@echo "NiFi UI: http://localhost:8443/nifi"
 
 nifi-down:
 	@echo ">> Stopping NiFi..."
@@ -46,12 +46,6 @@ nifi-logs:
 qdrant-up:
 	@echo ">> Starting Qdrant..."
 	docker compose up -d qdrant
-	@echo ">> Checking Qdrant health..."
-	# Windows:
-	- - powershell -Command "$$ErrorActionPreference='SilentlyContinue'; for($$i=0; $$i -lt 30; $$i++){ try { $$r = Invoke-WebRequest -UseBasicParsing http://localhost:$(QDRANT_PORT)/ready -TimeoutSec 2; if ($$r.StatusCode -eq 200) { Write-Host 'Qdrant is ready.'; exit 0 } } catch { } Start-Sleep -Seconds 2 } exit 1" || true
-	# macOS/Linux:
-	- sh -c 'for i in $$(seq 1 15); do curl -fsS http://localhost:6333/ready >/dev/null 2>&1 && { echo Qdrant is ready.; exit 0; }; echo waiting... $$i; sleep 2; done; exit 1' || true
-
 
 qdrant-down:
 	@echo ">> Stopping Qdrant..."
